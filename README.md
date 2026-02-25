@@ -1,49 +1,76 @@
-# 🌌 HoloNet v3: Hybrid Sliding-Window Attention with Gated Rotational Recurrent Vaults
+<div align="center">
+  
+  <img src="https://via.placeholder.com/800x200/0a0a0a/ffffff?text=H+O+L+O+N+E+T++v+3" alt="HoloNet Banner" width="100%">
 
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)
+  <h1>🌌 HoloNet v3</h1>
+  <p><b>Hybrid Sliding-Window Attention × Gated Rotational Recurrent Vaults</b></p>
 
-> **"Stop tuning the toy and start architecting the machine; the world doesn't reward elegance, it rewards scale."**
+  <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg?style=for-the-badge&logo=pytorch"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-0a0a0a.svg?style=for-the-badge"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-Experimental_Prototype-00ffcc.svg?style=for-the-badge"></a>
 
-HoloNet v3 is an experimental hybrid neural architecture designed to solve the $O(N^2)$ context bottleneck of traditional Transformers. It fuses the exact retrieval capabilities of **Sliding-Window Attention** with the infinite-horizon compression of a **Cayley-Stabilized Rotational Vault**.
+  <br><br>
 
-## 🧠 The Architecture
+  > *"Stop tuning the toy and start architecting the machine; the world doesn't reward elegance, it rewards scale."*
 
-Standard Transformers must keep the entire Key-Value (KV) cache in memory, leading to massive hardware bottlenecks during long-context inference. HoloNet fixes this by splitting the memory into two distinct modules:
+</div>
 
-1. **The Sniper (Local Working Memory):** A standard Multi-Head Attention block restricted to a sliding local window (e.g., 2048 tokens) for perfect, high-fidelity recall of recent context.
-2. **The Vault (Global Recurrent Memory):** As tokens fall out of the sliding window, they are compressed into a fixed-dimensional recurrent state ($h_t$). 
+<hr>
 
-### The Vault Mathematics
-To prevent the vanishing/exploding gradients that plague traditional RNNs, HoloNet utilizes a unitary rotation-based state update, mathematically constrained by the **Cayley Transform** to ensure strict orthogonality, alongside a learned decay factor ($\gamma$) and a Low-Rank matrix ($L$) for selective forgetting:
+## ⚡ The Context Bottleneck is Dead
 
-$$h_t = \gamma (D h_{t-1}) + g_t \odot (L h_{t-1}) + W_{in} x_t$$
+Standard Transformers are bound by $O(N^2)$ memory scaling. They must hold the entire Key-Value (KV) cache in VRAM, crippling inference at long contexts. **HoloNet v3** shatters this limitation by physically separating working memory from long-term semantic tracking.
 
-Where:
-* $D = (I - S)(I + S)^{-1}$ is a perfectly stable rotation matrix.
-* $L = A B^T$ is the low-rank capacity bottleneck forcing semantic compression.
-* $\gamma$ is a learnable exponential decay factor to clear high-frequency noise.
+### 1. The Sniper (Local Working Memory)
+A precision Multi-Head Attention block strictly bounded to a sliding local window. It provides perfect, high-fidelity recall of the immediate context with zero long-term memory overhead.
 
-## 🚀 Key Innovations
+### 2. The Vault (Global Recurrent Memory)
+As tokens fall out of the sliding window, they are not discarded. They are compressed into a fixed-dimensional recurrent state ($h_t$) via a Cayley-stabilized rotational matrix and a low-rank capacity bottleneck.
 
-* **The "Kill Switch" (Vault-Forcing Attention Dropout):** To solve the "Lazy Optimization" problem where gradient descent ignores the recurrent state, HoloNet implements stochastic windowing. During training, the local attention is dynamically masked to `0` at random intervals, mathematically forcing the optimizer to route gradients through the Vault to minimize loss.
-* **Associative Scan Readiness:** The gating mechanism ($g_t$) is strictly input-dependent ($x_t$), decoupling it from the recurrent state ($h_t$). This ensures the update rule is a Linear Time-Invariant (LTI) system, making it compatible with $O(\log N)$ parallel associative scans (prefix sums) for Mamba-like training speeds on modern GPUs.
-* **Dual-Regime Learning Rates:** HoloNet separates the Riemannian optimization of the orthogonal matrix from the Euclidean optimization of the standard weights, preventing catastrophic phase drift during training.
+<br>
 
-## 💻 Quick Start (PyTorch)
+## 🧬 The Core Mathematics
+
+HoloNet utilizes a unitary rotation-based state update to prevent the vanishing gradients of traditional RNNs. The transition is governed by the **Cayley Transform**, ensuring strict orthogonality, combined with a learned decay factor ($\gamma$) and a selective Low-Rank forgetting matrix ($L$):
+
+<div align="center">
+  
+  `h_t = γ (D h_{t-1}) + g_t ⊙ (L h_{t-1}) + W_{in} x_t`
+  
+</div>
+
+* **$D = (I - S)(I + S)^{-1}$** : A perfectly stable, non-drifting rotation matrix.
+* **$L = A B^T$** : The low-rank bottleneck enforcing semantic compression.
+* **$\gamma$** : The learnable exponential decay factor filtering high-frequency noise.
+
+<br>
+
+## 🛑 Systems-Level Optimizations
+
+### 1. The "Kill Switch" (Vault-Forcing Dropout)
+Neural networks are lazy; they will optimize for the short-path (Local Attention) and ignore the Vault. HoloNet fixes this. During training, the local attention is stochastically masked to `0` at random intervals. **The Sniper goes blind.** The optimizer is mathematically forced to route gradients through the Vault to minimize loss, guaranteeing utilization.
+
+### 2. $O(\log N)$ Associative Scan Readiness
+The gating mechanism ($g_t$) is strictly input-dependent ($x_t$), decoupling it from the recurrent state ($h_t$). This renders the update rule a Linear Time-Invariant (LTI) system, fully compatible with parallel associative prefix-sums for near-Mamba training speeds on GPU clusters.
+
+### 3. Dual-Regime Learning Rates
+We separate the Riemannian optimization of the orthogonal matrix (slower, highly controlled) from the Euclidean optimization of the standard weights (fast), preventing catastrophic phase drift during training.
+
+<br>
+
+## 💻 Initialization (PyTorch)
 
 ```python
 import torch
-from holonet import HoloNetBlock
+from model.holonet import HoloNetBlock
 
 # Initialize the Hybrid Layer
-# d_model: Hidden dimension size
-# vault_dropout: The "Kill Switch" probability during training
+# d_model: Hidden dimension size | vault_dropout: The "Kill Switch" probability
 hybrid_layer = HoloNetBlock(d_model=512, n_heads=8, vault_dropout=0.2).cuda()
 
 # Input sequence: (Batch_Size, Sequence_Length, D_Model)
 x = torch.randn(4, 1024, 512).cuda()
 
-# Forward pass combining Local Attention and the Global Vault
+# Forward pass: Local Attention + Global Vault
 output = hybrid_layer(x)
 print(output.shape) # torch.Size([4, 1024, 512])
