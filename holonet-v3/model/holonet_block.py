@@ -1,144 +1,46 @@
-"""
-HoloNet Block: Component Integration Wrapper
-Combines Local Attention and Vault (SSM) into a unified block
-"""
-
 import torch
 import torch.nn as nn
-from .attention import LocalAttention
-from .vault import Vault
-
+from .vault import HoloNetVault
+from .attention import LocalSniperAttention
 
 class HoloNetBlock(nn.Module):
-    """
-    A complete HoloNet block combining:
-    1. Local Attention (the sniper) - for precise local dependencies
-    2. Vault/SSM (state management) - for long-range state tracking
-    3. Feed-forward networks - for non-linear transformations
-    
-    This is the core building block that can be stacked to create deep models.
-    """
-    
-    def __init__(self, dim, num_heads=8, window_size=64, ssm_state_dim=128, 
-                 dropout=0.1, ff_expansion=4):
-        """
-        Args:
-            dim: Model dimension
-            num_heads: Number of attention heads
-            window_size: Local attention window size
-            ssm_state_dim: State space model dimension
-            dropout: Dropout probability
-            ff_expansion: Feed-forward expansion factor
-        """
+    def __init__(self, d_model, n_heads, vault_rank=16, vault_dropout=0.2):
         super().__init__()
-        self.dim = dim
+        self.d_model = d_model
+        self.vault_dropout = vault_dropout
         
-        # Layer normalization
-        self.norm1 = nn.LayerNorm(dim)
-        self.norm2 = nn.LayerNorm(dim)
-        self.norm3 = nn.LayerNorm(dim)
+        # 1. The Fast Working Memory (Sniper)
+        self.sniper = LocalSniperAttention(d_model, n_heads)
+        self.ln1 = nn.LayerNorm(d_model)
         
-        # Local Attention Component
-        self.attention = LocalAttention(
-            dim=dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            dropout=dropout
-        )
+        # 2. The Persistent Global Memory (Vault)
+        self.vault = HoloNetVault(d_model=d_model, rank=vault_rank)
+        self.ln_vault = nn.LayerNorm(d_model)
         
-        # Vault/SSM Component
-        self.vault = Vault(
-            state_dim=ssm_state_dim,
-            input_dim=dim,
-            output_dim=dim
-        )
-        
-        # Feed-Forward Network
-        ff_hidden = int(dim * ff_expansion)
-        self.feed_forward = nn.Sequential(
-            nn.Linear(dim, ff_hidden),
+        # 3. Final Processing
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
             nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(ff_hidden, dim),
-            nn.Dropout(dropout)
+            nn.Linear(4 * d_model, d_model)
         )
-        
-        # Gating mechanisms for combining attention and SSM outputs
-        self.attention_gate = nn.Linear(dim, dim)
-        self.vault_gate = nn.Linear(dim, dim)
-    
-    def forward(self, x):
-        """
-        Process input through integrated HoloNet block.
-        
-        Args:
-            x: Input tensor (batch_size, seq_len, dim)
-        
-        Returns:
-            Output tensor (batch_size, seq_len, dim)
-        """
-        # Residual connection through attention
-        attn_out = self.attention(self.norm1(x))
-        attn_gated = attn_out * torch.sigmoid(self.attention_gate(attn_out))
-        x = x + attn_gated
-        
-        # Residual connection through SSM/Vault
-        ssm_out = self.vault(self.norm2(x))
-        ssm_gated = ssm_out * torch.sigmoid(self.vault_gate(ssm_out))
-        x = x + ssm_gated
-        
-        # Residual connection through feed-forward
-        ff_out = self.feed_forward(self.norm3(x))
-        x = x + ff_out
-        
-        return x
+        self.ln2 = nn.LayerNorm(d_model)
 
-
-class HoloNetStack(nn.Module):
-    """
-    Stack multiple HoloNet blocks to create a deep model.
-    """
-    
-    def __init__(self, dim, num_blocks=6, num_heads=8, window_size=64, 
-                 ssm_state_dim=128, dropout=0.1, ff_expansion=4):
-        """
-        Args:
-            dim: Model dimension
-            num_blocks: Number of HoloNet blocks to stack
-            num_heads: Number of attention heads
-            window_size: Local attention window size
-            ssm_state_dim: State space model dimension
-            dropout: Dropout probability
-            ff_expansion: Feed-forward expansion factor
-        """
-        super().__init__()
-        
-        self.blocks = nn.ModuleList([
-            HoloNetBlock(
-                dim=dim,
-                num_heads=num_heads,
-                window_size=window_size,
-                ssm_state_dim=ssm_state_dim,
-                dropout=dropout,
-                ff_expansion=ff_expansion
-            )
-            for _ in range(num_blocks)
-        ])
-        
-        self.final_norm = nn.LayerNorm(dim)
-    
     def forward(self, x):
-        """
-        Process input through stack of HoloNet blocks.
+        # --- A. Local Attention ---
+        attn_out = self.sniper(x, x, x)
         
-        Args:
-            x: Input tensor (batch_size, seq_len, dim)
+        # 🚨 THE KILL SWITCH 🚨
+        if self.training and torch.rand(1).item() < self.vault_dropout:
+            attn_out = torch.zeros_like(attn_out)
+            
+        x = self.ln1(x + attn_out)
         
-        Returns:
-            Output tensor (batch_size, seq_len, dim)
-        """
-        for block in self.blocks:
-            x = block(x)
+        # --- B. Global Vault ---
+        vault_out = self.vault(x)
+        x = x + self.ln_vault(vault_out)
         
-        x = self.final_norm(x)
-        return x
+        # --- C. FFN Processing ---
+        ffn_out = self.ffn(x)
+        out = self.ln2(x + ffn_out)
+        
+        return out
